@@ -20,14 +20,10 @@
       return;
     }
     const node = selection[0];
-    if (msg.type === "generate-html-css") {
+    if (msg.type === "generate-html-css" || msg.type === "generate-css-only") {
       const result = generateHTMLCSS(node);
-      figma.ui.postMessage({ type: "result", code: result.html + "\n\n/* CSS */\n" + result.css });
-      return;
-    }
-    if (msg.type === "generate-css-only") {
-      const result = generateHTMLCSS(node);
-      figma.ui.postMessage({ type: "result", code: result.css });
+      const code = msg.type === "generate-html-css" ? result.html + "\n\n/* CSS */\n" + result.css : result.css;
+      figma.ui.postMessage({ type: "result", code });
       return;
     }
     if (msg.type === "generate-react-ai") {
@@ -62,32 +58,37 @@
     } else styles.position = "relative";
     if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
       const fill = node.fills[0];
-      if (fill.visible === false) {
-      } else if (fill.type === "SOLID" && fill.color) {
-        styles.backgroundColor = rgbaToHex(fill.color);
-      } else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
-        const stops = fill.gradientStops.map((s) => `${rgbaToHex(s.color)} ${Math.round(s.position * 100)}%`).join(", ");
-        if (fill.type === "GRADIENT_LINEAR") styles.background = `linear-gradient(90deg, ${stops})`;
-        else if (fill.type === "GRADIENT_RADIAL") styles.background = `radial-gradient(circle, ${stops})`;
+      if (fill.visible !== false) {
+        if (fill.type === "SOLID" && fill.color) {
+          styles.backgroundColor = rgba(fill.color, fill.opacity ?? 1);
+        } else if (["GRADIENT_LINEAR", "GRADIENT_RADIAL"].includes(fill.type)) {
+          const stops = fill.gradientStops.map((s) => `${rgba(s.color, s.color.a ?? 1)} ${Math.round(s.position * 100)}%`).join(", ");
+          styles.background = fill.type === "GRADIENT_LINEAR" ? `linear-gradient(90deg, ${stops})` : `radial-gradient(circle, ${stops})`;
+        }
       }
     }
     if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length > 0) {
       const stroke = node.strokes[0];
-      if (stroke.type === "SOLID" && stroke.color) {
-        styles.border = `${"strokeWeight" in node ? node.strokeWeight + "px" : "1px"} solid ${rgbaToHex(stroke.color)}`;
+      if (stroke.visible !== false && stroke.type === "SOLID" && stroke.color) {
+        styles.border = `${"strokeWeight" in node ? node.strokeWeight + "px" : "1px"} solid ${rgba(stroke.color, stroke.opacity ?? 1)}`;
+        if ("dashPattern" in node && node.dashPattern?.length) styles.borderStyle = "dashed";
       }
     }
-    if ("cornerRadius" in node && typeof node.cornerRadius === "number") styles.borderRadius = node.cornerRadius + "px";
-    else if ("topLeftRadius" in node) {
-      styles.borderTopLeftRadius = node.topLeftRadius + "px";
-      styles.borderTopRightRadius = node.topRightRadius + "px";
-      styles.borderBottomLeftRadius = node.bottomLeftRadius + "px";
-      styles.borderBottomRightRadius = node.bottomRightRadius + "px";
-    }
+    if ("cornerRadius" in node && typeof node.cornerRadius === "number")
+      styles.borderRadius = node.cornerRadius + "px";
+    else if ("topLeftRadius" in node)
+      ["TopLeft", "TopRight", "BottomLeft", "BottomRight"].forEach(
+        (r) => styles[`border${r}Radius`] = node[`border${r}Radius`] + "px"
+      );
     if ("effects" in node && Array.isArray(node.effects)) {
-      const shadows = node.effects.filter((e) => (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") && e.visible !== false).map((e) => `${e.type === "INNER_SHADOW" ? "inset " : ""}${e.offset.x}px ${e.offset.y}px ${e.radius}px ${rgbaToHex(e.color)}`).join(", ");
+      const shadows = node.effects.filter((e) => ["DROP_SHADOW", "INNER_SHADOW"].includes(e.type) && e.visible !== false).map((e) => `${e.type === "INNER_SHADOW" ? "inset " : ""}${e.offset.x}px ${e.offset.y}px ${e.radius}px ${rgba(e.color, e.color.a ?? 1)}`).join(", ");
       if (shadows) styles.boxShadow = shadows;
+      const layerBlur = node.effects.find((e) => e.type === "LAYER_BLUR" && e.visible !== false);
+      const bgBlur = node.effects.find((e) => e.type === "BACKGROUND_BLUR" && e.visible !== false);
+      if (layerBlur) styles.filter = `blur(${layerBlur.radius}px)`;
+      if (bgBlur) styles.backdropFilter = `blur(${bgBlur.radius}px)`;
     }
+    if ("blendMode" in node) styles.mixBlendMode = node.blendMode.toLowerCase();
     if ("layoutMode" in node && node.layoutMode !== "NONE") {
       styles.display = "flex";
       styles.flexDirection = node.layoutMode === "HORIZONTAL" ? "row" : "column";
@@ -98,15 +99,55 @@
         styles.padding = `${node.paddingTop}px ${node.paddingRight}px ${node.paddingBottom}px ${node.paddingLeft}px`;
       }
     }
+    if ("layoutGrow" in node && node.layoutGrow > 0) styles.flexGrow = node.layoutGrow;
+    if ("layoutAlign" in node) {
+      if (node.layoutAlign === "STRETCH") styles.alignSelf = "stretch";
+      else if (node.layoutAlign === "CENTER") styles.alignSelf = "center";
+    }
+    if ("constraints" in node) {
+      const { horizontal, vertical } = node.constraints;
+      if (horizontal === "LEFT_RIGHT") {
+        styles.left = "0";
+        styles.right = "0";
+        styles.width = "auto";
+      }
+      if (vertical === "TOP_BOTTOM") {
+        styles.top = "0";
+        styles.bottom = "0";
+        styles.height = "auto";
+      }
+    }
+    if ("rotation" in node && node.rotation !== 0)
+      styles.transform = `rotate(${node.rotation}deg)`;
+    if ("relativeTransform" in node && Array.isArray(node.relativeTransform)) {
+      const [a, b, c, d] = [node.relativeTransform[0][0], node.relativeTransform[0][1], node.relativeTransform[1][0], node.relativeTransform[1][1]];
+      if (a !== 1 || d !== 1)
+        styles.transform = (styles.transform ?? "") + ` scale(${a}, ${d})`;
+    }
     if (node.type === "TEXT") {
       const textNode = node;
       if (textNode.fontSize) styles.fontSize = textNode.fontSize + "px";
       if (textNode.fontName && typeof textNode.fontName !== "symbol") styles.fontFamily = `"${textNode.fontName.family}"`;
-      if (textNode.textAlignHorizontal) styles.textAlign = textNode.textAlignHorizontal.toLowerCase();
       if (textNode.fontWeight) styles.fontWeight = textNode.fontWeight;
+      if (textNode.textAlignHorizontal) styles.textAlign = textNode.textAlignHorizontal.toLowerCase();
+      if (textNode.textAlignVertical) styles.verticalAlign = textNode.textAlignVertical.toLowerCase();
+      if (textNode.textDecoration) styles.textDecoration = textNode.textDecoration.toLowerCase();
+      if (textNode.textCase) {
+        if (textNode.textCase === "UPPER") styles.textTransform = "uppercase";
+        else if (textNode.textCase === "LOWER") styles.textTransform = "lowercase";
+        else if (textNode.textCase === "TITLE") styles.textTransform = "capitalize";
+      }
+      if (textNode.letterSpacing) styles.letterSpacing = textNode.letterSpacing + "px";
+      if (textNode.paragraphSpacing) styles.marginBottom = textNode.paragraphSpacing + "px";
+      if (textNode.paragraphIndent) styles.textIndent = textNode.paragraphIndent + "px";
+      if (textNode.fontStyle === "ITALIC") styles.fontStyle = "italic";
       if (textNode.lineHeight && typeof textNode.lineHeight === "object" && "value" in textNode.lineHeight)
         styles.lineHeight = textNode.lineHeight.value + "px";
       styles.color = getTextColor(node);
+    }
+    if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length > 0) {
+      const g = node.layoutGrids[0];
+      if (g.pattern === "COLUMNS") styles.backgroundImage = `repeating-linear-gradient(90deg, rgba(0,0,0,0.05) 0, rgba(0,0,0,0.05) ${g.sectionSize}px, transparent ${g.sectionSize}px, transparent ${g.sectionSize + g.gutterSize}px)`;
     }
     if ("opacity" in node) styles.opacity = node.opacity;
     css += `.${className} { ${Object.entries(styles).map(([k, v]) => k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase()) + ":" + v).join("; ")}; }
@@ -152,12 +193,19 @@
         return "flex-start";
     }
   }
-  function rgbaToHex(color) {
+  function rgba(color, alpha = 1) {
     const r = Math.round(color.r * 255);
     const g = Math.round(color.g * 255);
     const b = Math.round(color.b * 255);
-    const a = "a" in color ? Math.round(color.a * 100) / 100 : 1;
-    return a < 1 ? `rgba(${r}, ${g}, ${b}, ${a})` : `#${[r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+    const a = "a" in color ? color.a * alpha : alpha;
+    return `rgba(${r},${g},${b},${a.toFixed(2)})`;
+  }
+  function getTextColor(node) {
+    if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
+      const fill = node.fills[0];
+      if (fill.type === "SOLID" && fill.color) return rgba(fill.color, fill.opacity ?? 1);
+    }
+    return "rgba(0,0,0,1)";
   }
   async function extractNodeJSON(node) {
     const obj = {
@@ -170,14 +218,7 @@
     };
     if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
       const fill = node.fills[0];
-      if (fill.type === "SOLID" && fill.color) obj.fill = { r: fill.color.r, g: fill.color.g, b: fill.color.b };
-      else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
-        obj.gradient = fill.gradientStops.map((s) => ({
-          color: { r: s.color.r, g: s.color.g, b: s.color.b },
-          position: s.position
-        }));
-        obj.gradientType = fill.type;
-      }
+      if (fill.type === "SOLID" && fill.color) obj.fill = rgba(fill.color, fill.opacity ?? 1);
     }
     if (node.type === "TEXT") {
       const textNode = node;
@@ -192,20 +233,10 @@
     }
     return obj;
   }
-  function getTextColor(node) {
-    if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
-      const fill = node.fills[0];
-      if (fill.type === "SOLID" && fill.color) return rgbaToHex(fill.color);
-    }
-    return "#000000";
-  }
   async function generateReactWithAI(frameData, apiKey, baseUrl, modelName) {
     const response = await fetch(baseUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: modelName,
         messages: [
@@ -216,7 +247,7 @@
       })
     });
     const data = await response.json();
-    if (!data.choices || data.choices.length === 0) throw new Error("AI \u043D\u0435 \u0432\u0435\u0440\u043D\u0443\u043B \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442");
+    if (!data.choices?.length) throw new Error("AI \u043D\u0435 \u0432\u0435\u0440\u043D\u0443\u043B \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442");
     return data.choices[0].message.content;
   }
 })();

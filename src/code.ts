@@ -21,37 +21,26 @@ figma.ui.onmessage = async (msg) => {
   }
   const node = selection[0];
 
-  // ---------------------------
-  // HTML + CSS генерация локально
-  // ---------------------------
-  if (msg.type === "generate-html-css") {
+  // Локальная генерация
+  if (msg.type === "generate-html-css" || msg.type === "generate-css-only") {
     const result = generateHTMLCSS(node);
-    figma.ui.postMessage({ type: "result", code: result.html + "\n\n/* CSS */\n" + result.css });
+    const code = msg.type === "generate-html-css"
+      ? result.html + "\n\n/* CSS */\n" + result.css
+      : result.css;
+    figma.ui.postMessage({ type: "result", code });
     return;
   }
 
-  if (msg.type === "generate-css-only") {
-    const result = generateHTMLCSS(node);
-    figma.ui.postMessage({ type: "result", code: result.css });
-    return;
-  }
-
-  // ---------------------------
   // AI генерация React
-  // ---------------------------
   if (msg.type === "generate-react-ai") {
     if (!msg.apiKey || !msg.baseUrl || !msg.model) {
       figma.ui.postMessage({ type: "error", message: "Для React через AI нужно заполнить API_KEY, BASE_URL и MODEL_NAME" });
       return;
     }
-
-    // Сохраняем настройки
     await figma.clientStorage.setAsync("apiKey", msg.apiKey);
     await figma.clientStorage.setAsync("baseUrl", msg.baseUrl);
     await figma.clientStorage.setAsync("modelName", msg.model);
-
     figma.ui.postMessage({ type: "info", message: "Отправляем данные в AI..." });
-
     try {
       const frameData = await extractNodeJSON(node);
       const reactCode = await generateReactWithAI(frameData, msg.apiKey, msg.baseUrl, msg.model);
@@ -63,58 +52,70 @@ figma.ui.onmessage = async (msg) => {
 };
 
 // ---------------------------
-// HTML + CSS генерация с расширенными стилями
+// Полная HTML + CSS генерация
 // ---------------------------
 function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: string } {
   const className = node.name.replace(/\s+/g, "_") + (depth > 0 ? "_" + depth : "");
   let html = "";
   let css = "";
-
   const styles: any = {};
 
+  // Позиция и размеры
   if ("width" in node) styles.width = node.width + "px";
   if ("height" in node) styles.height = node.height + "px";
-  if ("x" in node && depth > 0) { styles.position = "absolute"; styles.left = node.x + "px"; styles.top = node.y + "px"; } 
-  else styles.position = "relative";
+  if ("x" in node && depth > 0) {
+    styles.position = "absolute";
+    styles.left = node.x + "px";
+    styles.top = node.y + "px";
+  } else styles.position = "relative";
 
   // ---- Fills + градиенты ----
   if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
     const fill = node.fills[0];
-    if (fill.visible === false) {} 
-    else if (fill.type === "SOLID" && fill.color) {
-      styles.backgroundColor = rgbaToHex(fill.color);
-    } else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
-      const stops = fill.gradientStops.map(s => `${rgbaToHex(s.color)} ${Math.round(s.position*100)}%`).join(", ");
-      if (fill.type === "GRADIENT_LINEAR") styles.background = `linear-gradient(90deg, ${stops})`;
-      else if (fill.type === "GRADIENT_RADIAL") styles.background = `radial-gradient(circle, ${stops})`;
+    if (fill.visible !== false) {
+      if (fill.type === "SOLID" && fill.color) {
+        styles.backgroundColor = rgba(fill.color, fill.opacity ?? 1);
+      } else if (["GRADIENT_LINEAR", "GRADIENT_RADIAL"].includes(fill.type)) {
+        const stops = fill.gradientStops.map(s => `${rgba(s.color, s.color.a ?? 1)} ${Math.round(s.position * 100)}%`).join(", ");
+        styles.background =
+          fill.type === "GRADIENT_LINEAR"
+            ? `linear-gradient(90deg, ${stops})`
+            : `radial-gradient(circle, ${stops})`;
+      }
     }
   }
 
   // ---- Границы ----
   if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length > 0) {
     const stroke = node.strokes[0];
-    if (stroke.type === "SOLID" && stroke.color) {
-      styles.border = `${"strokeWeight" in node ? node.strokeWeight + "px" : "1px"} solid ${rgbaToHex(stroke.color)}`;
+    if (stroke.visible !== false && stroke.type === "SOLID" && stroke.color) {
+      styles.border = `${"strokeWeight" in node ? node.strokeWeight + "px" : "1px"} solid ${rgba(stroke.color, stroke.opacity ?? 1)}`;
+      if ("dashPattern" in node && node.dashPattern?.length) styles.borderStyle = "dashed";
     }
   }
 
   // ---- Скругления ----
-  if ("cornerRadius" in node && typeof node.cornerRadius === "number") styles.borderRadius = node.cornerRadius + "px";
-  else if ("topLeftRadius" in node) {
-    styles.borderTopLeftRadius = node.topLeftRadius + "px";
-    styles.borderTopRightRadius = node.topRightRadius + "px";
-    styles.borderBottomLeftRadius = node.bottomLeftRadius + "px";
-    styles.borderBottomRightRadius = node.bottomRightRadius + "px";
-  }
+  if ("cornerRadius" in node && typeof node.cornerRadius === "number")
+    styles.borderRadius = node.cornerRadius + "px";
+  else if ("topLeftRadius" in node)
+    ["TopLeft", "TopRight", "BottomLeft", "BottomRight"].forEach(r =>
+      (styles[`border${r}Radius`] = node[`border${r}Radius`] + "px")
+    );
 
-  // ---- Тени ----
+  // ---- Тени, blur, blend ----
   if ("effects" in node && Array.isArray(node.effects)) {
     const shadows = node.effects
-      .filter(e => (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") && e.visible !== false)
-      .map(e => `${e.type === "INNER_SHADOW" ? "inset " : ""}${e.offset.x}px ${e.offset.y}px ${e.radius}px ${rgbaToHex(e.color)}`)
+      .filter(e => ["DROP_SHADOW", "INNER_SHADOW"].includes(e.type) && e.visible !== false)
+      .map(e => `${e.type === "INNER_SHADOW" ? "inset " : ""}${e.offset.x}px ${e.offset.y}px ${e.radius}px ${rgba(e.color, e.color.a ?? 1)}`)
       .join(", ");
     if (shadows) styles.boxShadow = shadows;
+    const layerBlur = node.effects.find(e => e.type === "LAYER_BLUR" && e.visible !== false);
+    const bgBlur = node.effects.find(e => e.type === "BACKGROUND_BLUR" && e.visible !== false);
+    if (layerBlur) styles.filter = `blur(${layerBlur.radius}px)`;
+    if (bgBlur) styles.backdropFilter = `blur(${bgBlur.radius}px)`;
   }
+
+  if ("blendMode" in node) styles.mixBlendMode = node.blendMode.toLowerCase();
 
   // ---- Layout / AutoLayout ----
   if ("layoutMode" in node && node.layoutMode !== "NONE") {
@@ -127,23 +128,61 @@ function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: strin
       styles.padding = `${node.paddingTop}px ${node.paddingRight}px ${node.paddingBottom}px ${node.paddingLeft}px`;
     }
   }
+  if ("layoutGrow" in node && node.layoutGrow > 0) styles.flexGrow = node.layoutGrow;
+  if ("layoutAlign" in node) {
+    if (node.layoutAlign === "STRETCH") styles.alignSelf = "stretch";
+    else if (node.layoutAlign === "CENTER") styles.alignSelf = "center";
+  }
 
-  // ---- Текст ----
+  // ---- Constraints ----
+  if ("constraints" in node) {
+    const { horizontal, vertical } = node.constraints;
+    if (horizontal === "LEFT_RIGHT") { styles.left = "0"; styles.right = "0"; styles.width = "auto"; }
+    if (vertical === "TOP_BOTTOM") { styles.top = "0"; styles.bottom = "0"; styles.height = "auto"; }
+  }
+
+  // ---- Rotation / Scale ----
+  if ("rotation" in node && node.rotation !== 0)
+    styles.transform = `rotate(${node.rotation}deg)`;
+  if ("relativeTransform" in node && Array.isArray(node.relativeTransform)) {
+    const [a, b, c, d] = [node.relativeTransform[0][0], node.relativeTransform[0][1], node.relativeTransform[1][0], node.relativeTransform[1][1]];
+    if (a !== 1 || d !== 1)
+      styles.transform = (styles.transform ?? "") + ` scale(${a}, ${d})`;
+  }
+
+  // ---- Text ----
   if (node.type === "TEXT") {
     const textNode = node as TextNode;
     if (textNode.fontSize) styles.fontSize = textNode.fontSize + "px";
     if (textNode.fontName && typeof textNode.fontName !== "symbol") styles.fontFamily = `"${textNode.fontName.family}"`;
-    if (textNode.textAlignHorizontal) styles.textAlign = textNode.textAlignHorizontal.toLowerCase();
     if (textNode.fontWeight) styles.fontWeight = textNode.fontWeight;
+    if (textNode.textAlignHorizontal) styles.textAlign = textNode.textAlignHorizontal.toLowerCase();
+    if (textNode.textAlignVertical) styles.verticalAlign = textNode.textAlignVertical.toLowerCase();
+    if (textNode.textDecoration) styles.textDecoration = textNode.textDecoration.toLowerCase();
+    if (textNode.textCase) {
+      if (textNode.textCase === "UPPER") styles.textTransform = "uppercase";
+      else if (textNode.textCase === "LOWER") styles.textTransform = "lowercase";
+      else if (textNode.textCase === "TITLE") styles.textTransform = "capitalize";
+    }
+    if (textNode.letterSpacing) styles.letterSpacing = textNode.letterSpacing + "px";
+    if (textNode.paragraphSpacing) styles.marginBottom = textNode.paragraphSpacing + "px";
+    if (textNode.paragraphIndent) styles.textIndent = textNode.paragraphIndent + "px";
+    if (textNode.fontStyle === "ITALIC") styles.fontStyle = "italic";
     if (textNode.lineHeight && typeof textNode.lineHeight === "object" && "value" in textNode.lineHeight)
       styles.lineHeight = textNode.lineHeight.value + "px";
     styles.color = getTextColor(node);
   }
 
+  // ---- Layout grids ----
+  if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length > 0) {
+    const g = node.layoutGrids[0];
+    if (g.pattern === "COLUMNS") styles.backgroundImage = `repeating-linear-gradient(90deg, rgba(0,0,0,0.05) 0, rgba(0,0,0,0.05) ${g.sectionSize}px, transparent ${g.sectionSize}px, transparent ${g.sectionSize + g.gutterSize}px)`;
+  }
+
   if ("opacity" in node) styles.opacity = node.opacity;
 
   css += `.${className} { ${Object.entries(styles)
-    .map(([k,v])=>k.replace(/[A-Z]/g,m=>"-"+m.toLowerCase()) + ":" + v)
+    .map(([k, v]) => k.replace(/[A-Z]/g, m => "-" + m.toLowerCase()) + ":" + v)
     .join("; ")}; }\n`;
 
   if (node.type === "TEXT") {
@@ -163,28 +202,39 @@ function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: strin
   return { html, css };
 }
 
-function mapPrimaryAxis(v: string): string {
-  switch(v) {
+// ---------------------------
+// Вспомогательные функции
+// ---------------------------
+function mapPrimaryAxis(v: string) {
+  switch (v) {
     case "SPACE_BETWEEN": return "space-between";
     case "CENTER": return "center";
     case "MAX": return "flex-end";
     default: return "flex-start";
   }
 }
-function mapCounterAxis(v: string): string {
-  switch(v) {
+function mapCounterAxis(v: string) {
+  switch (v) {
     case "CENTER": return "center";
     case "MAX": return "flex-end";
     default: return "flex-start";
   }
 }
 
-function rgbaToHex(color: RGBA | RGB) {
+function rgba(color: RGB | RGBA, alpha = 1): string {
   const r = Math.round(color.r * 255);
   const g = Math.round(color.g * 255);
   const b = Math.round(color.b * 255);
-  const a = "a" in color ? Math.round(color.a * 100) / 100 : 1;
-  return a < 1 ? `rgba(${r}, ${g}, ${b}, ${a})` : `#${[r,g,b].map(x=>x.toString(16).padStart(2,"0")).join("")}`;
+  const a = "a" in color ? color.a * alpha : alpha;
+  return `rgba(${r},${g},${b},${a.toFixed(2)})`;
+}
+
+function getTextColor(node: SceneNode): string {
+  if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
+    const fill = node.fills[0];
+    if (fill.type === "SOLID" && fill.color) return rgba(fill.color, fill.opacity ?? 1);
+  }
+  return "rgba(0,0,0,1)";
 }
 
 // ---------------------------
@@ -199,19 +249,10 @@ async function extractNodeJSON(node: SceneNode): Promise<any> {
     x: 'x' in node ? node.x : null,
     y: 'y' in node ? node.y : null
   };
-
   if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
     const fill = node.fills[0];
-    if (fill.type === "SOLID" && fill.color) obj.fill = { r: fill.color.r, g: fill.color.g, b: fill.color.b };
-    else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
-      obj.gradient = fill.gradientStops.map(s => ({
-        color: { r: s.color.r, g: s.color.g, b: s.color.b },
-        position: s.position
-      }));
-      obj.gradientType = fill.type;
-    }
+    if (fill.type === "SOLID" && fill.color) obj.fill = rgba(fill.color, fill.opacity ?? 1);
   }
-
   if (node.type === "TEXT") {
     const textNode = node as TextNode;
     obj.text = textNode.characters;
@@ -219,30 +260,17 @@ async function extractNodeJSON(node: SceneNode): Promise<any> {
     obj.color = getTextColor(node);
     obj.fontFamily = typeof textNode.fontName !== "symbol" ? textNode.fontName.family : null;
   }
-
   if ("children" in node && node.children.length > 0) {
     obj.children = [];
     for (const child of node.children) obj.children.push(await extractNodeJSON(child));
   }
-
   return obj;
-}
-
-function getTextColor(node: SceneNode): string {
-  if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
-    const fill = node.fills[0];
-    if (fill.type === "SOLID" && fill.color) return rgbaToHex(fill.color);
-  }
-  return "#000000";
 }
 
 async function generateReactWithAI(frameData: any, apiKey: string, baseUrl: string, modelName: string): Promise<string> {
   const response = await fetch(baseUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: modelName,
       messages: [
@@ -252,8 +280,7 @@ async function generateReactWithAI(frameData: any, apiKey: string, baseUrl: stri
       temperature: 0.2
     })
   });
-
   const data = await response.json();
-  if (!data.choices || data.choices.length === 0) throw new Error("AI не вернул результат");
+  if (!data.choices?.length) throw new Error("AI не вернул результат");
   return data.choices[0].message.content;
 }
