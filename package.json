@@ -9,5 +9,8 @@
     "@figma/plugin-typings": "^1.95.0",
     "esbuild": "^0.21.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
   }
 }
