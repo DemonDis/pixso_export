@@ -63,7 +63,7 @@ figma.ui.onmessage = async (msg) => {
 };
 
 // ---------------------------
-// HTML + CSS генерация локально
+// HTML + CSS генерация локально с поддержкой градиентов
 // ---------------------------
 function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: string } {
   const className = node.name.replace(/\s+/g, "_") + (depth > 0 ? "_" + depth : "");
@@ -75,10 +75,21 @@ function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: strin
   if ("height" in node) styles.height = node.height + "px";
   if ("x" in node && depth > 0) { styles.position = "absolute"; styles.left = node.x + "px"; styles.top = node.y + "px"; } 
   else styles.position = "relative";
+
+  // ---- обработка fills с градиентами ----
   if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
     const fill = node.fills[0];
-    if (fill.type === "SOLID" && fill.color) styles.backgroundColor = rgbaToHex(fill.color);
+
+    if (fill.type === "SOLID" && fill.color) {
+      styles.backgroundColor = rgbaToHex(fill.color);
+    } else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
+      const stops = fill.gradientStops.map(s => `${rgbaToHex(s.color)} ${Math.round(s.position*100)}%`).join(", ");
+      if (fill.type === "GRADIENT_LINEAR") styles.background = `linear-gradient(90deg, ${stops})`;
+      else if (fill.type === "GRADIENT_RADIAL") styles.background = `radial-gradient(circle, ${stops})`;
+    }
+    // GRADIENT_ANGULAR и GRADIENT_DIAMOND пока игнорируем, чтобы не ломать плагин
   }
+
   if ("cornerRadius" in node) styles.borderRadius = node.cornerRadius + "px";
   if ("opacity" in node) styles.opacity = node.opacity;
 
@@ -123,6 +134,10 @@ async function extractNodeJSON(node: SceneNode): Promise<any> {
   if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
     const fill = node.fills[0];
     if (fill.type === "SOLID" && fill.color) obj.fill = { r: fill.color.r, g: fill.color.g, b: fill.color.b };
+    else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
+      obj.gradient = fill.gradientStops.map(s => ({ color: { r: s.color.r, g: s.color.g, b: s.color.b }, position: s.position }));
+      obj.gradientType = fill.type;
+    }
   }
 
   if (node.type === "TEXT") {
