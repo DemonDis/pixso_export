@@ -1,46 +1,33 @@
 {
-  "name": "export",
+  "name": "pixso_export",
   "version": "1.0.0",
-  "description": "Your Figma widget",
+  "description": "Figma plugin to export components to TXT/HTML/CSS",
+  "main": "dist/code.js",
   "scripts": {
-    "build": "esbuild widget-src/code.tsx --bundle --outfile=dist/code.js --target=es6",
-    "lint": "eslint --ext .ts,.tsx --ignore-pattern node_modules .",
-    "lint:fix": "eslint --ext .ts,.tsx --ignore-pattern node_modules --fix .",
-    "tsc": "tsc --noEmit -p widget-src",
-    "watch": "npm run build -- --watch"
+    "build": "esbuild src/code.ts --bundle --outfile=dist/code.js --format=iife --platform=node --define:process.env.NODE_ENV='\"production\"' --define:process.env.BASE_URL='\"YOUR_BASE_URL\"' --define:process.env.HYDRA_AI_API_KEY='\"YOUR_HYDRA_AI_API_KEY\"' --define:process.env.GPT_MODEL_NAME='\"gpt-3.5-turbo\"'",
+    "watch": "esbuild src/code.ts --bundle --outfile=dist/code.js --format=iife --platform=node --define:process.env.NODE_ENV='\"production\"' --define:process.env.BASE_URL='\"YOUR_BASE_URL\"' --define:process.env.HYDRA_AI_API_KEY='\"YOUR_HYDRA_AI_API_KEY\"' --define:process.env.GPT_MODEL_NAME='\"gpt-3.5-turbo\"' --watch",
+    "dev": "npm run watch",
+    "lint": "eslint src/",
+    "test": "echo \"No tests specified\""
   },
-  "author": "",
-  "license": "",
   "devDependencies": {
-    "@figma/eslint-plugin-figma-plugins": "*",
-    "@figma/plugin-typings": "*",
-    "@figma/widget-typings": "*",
-    "@typescript-eslint/eslint-plugin": "^6.12.0",
-    "@typescript-eslint/parser": "^6.12.0",
-    "esbuild": "*",
-    "eslint": "^8.54.0",
-    "typescript": "^5.3.2"
+    "@figma/plugin-typings": "^1.95.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
   },
-  "eslintConfig": {
-    "extends": [
-      "eslint:recommended",
-      "plugin:@typescript-eslint/recommended",
-      "plugin:@figma/figma-plugins/recommended"
-    ],
-    "parser": "@typescript-eslint/parser",
-    "parserOptions": {
-      "project": "./widget-src/tsconfig.json"
-    },
-    "root": true,
-    "rules": {
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          "argsIgnorePattern": "^_",
-          "varsIgnorePattern": "^_",
-          "caughtErrorsIgnorePattern": "^_"
-        }
-      ]
-    }
+  "keywords": [
+    "figma",
+    "plugin",
+    "export",
+    "html",
+    "css",
+    "hydraai"
+  ],
+  "author": "You",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.2.3"
   }
 }

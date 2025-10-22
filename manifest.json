@@ -1,18 +1,14 @@
 {
-  "name": "export",
-  "id": "1562351585891525388",
+  "name": "Figma to HTML/CSS Exporter",
+  "id": "1562380729278066559",
   "api": "1.0.0",
-  "main": "dist/code.js",
+  "main": "./dist/code.js",
+  "ui": "./dist/ui.html",
   "capabilities": [],
   "enableProposedApi": false,
   "documentAccess": "dynamic-page",
-  "editorType": [
-    "figma",
-    "figjam"
-  ],
-  "containsWidget": true,
-  "widgetApi": "1.0.0",
+  "editorType": ["figma"],
   "networkAccess": {
-  "allowedDomains": ["https://api.hydraai.ru"]
+    "allowedDomains": ["https://api.hydraai.ru"]
   }
 }
