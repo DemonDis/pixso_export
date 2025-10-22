@@ -17,7 +17,7 @@ Thumbs.db
 *.lnk
 
 # Build artifacts
-dist/
+# dist/
 build/
 coverage/
 

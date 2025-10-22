@@ -45,7 +45,7 @@ figma.ui.onmessage = async (msg) => {
       return;
     }
 
-    // Сохраняем настройки через clientStorage
+    // Сохраняем настройки
     await figma.clientStorage.setAsync("apiKey", msg.apiKey);
     await figma.clientStorage.setAsync("baseUrl", msg.baseUrl);
     await figma.clientStorage.setAsync("modelName", msg.model);
@@ -63,7 +63,7 @@ figma.ui.onmessage = async (msg) => {
 };
 
 // ---------------------------
-// HTML + CSS генерация локально с поддержкой градиентов
+// HTML + CSS генерация с расширенными стилями
 // ---------------------------
 function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: string } {
   const className = node.name.replace(/\s+/g, "_") + (depth > 0 ? "_" + depth : "");
@@ -71,33 +71,83 @@ function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: strin
   let css = "";
 
   const styles: any = {};
+
   if ("width" in node) styles.width = node.width + "px";
   if ("height" in node) styles.height = node.height + "px";
   if ("x" in node && depth > 0) { styles.position = "absolute"; styles.left = node.x + "px"; styles.top = node.y + "px"; } 
   else styles.position = "relative";
 
-  // ---- обработка fills с градиентами ----
+  // ---- Fills + градиенты ----
   if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) {
     const fill = node.fills[0];
-
-    if (fill.type === "SOLID" && fill.color) {
+    if (fill.visible === false) {} 
+    else if (fill.type === "SOLID" && fill.color) {
       styles.backgroundColor = rgbaToHex(fill.color);
     } else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
       const stops = fill.gradientStops.map(s => `${rgbaToHex(s.color)} ${Math.round(s.position*100)}%`).join(", ");
       if (fill.type === "GRADIENT_LINEAR") styles.background = `linear-gradient(90deg, ${stops})`;
       else if (fill.type === "GRADIENT_RADIAL") styles.background = `radial-gradient(circle, ${stops})`;
     }
-    // GRADIENT_ANGULAR и GRADIENT_DIAMOND пока игнорируем, чтобы не ломать плагин
   }
 
-  if ("cornerRadius" in node) styles.borderRadius = node.cornerRadius + "px";
-  if ("opacity" in node) styles.opacity = node.opacity;
+  // ---- Границы ----
+  if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length > 0) {
+    const stroke = node.strokes[0];
+    if (stroke.type === "SOLID" && stroke.color) {
+      styles.border = `${"strokeWeight" in node ? node.strokeWeight + "px" : "1px"} solid ${rgbaToHex(stroke.color)}`;
+    }
+  }
 
-  css += `.${className} { ${Object.entries(styles).map(([k,v])=>k.replace(/[A-Z]/g,m=>"-"+m.toLowerCase()) + ":" + v).join("; ")}; }\n`;
+  // ---- Скругления ----
+  if ("cornerRadius" in node && typeof node.cornerRadius === "number") styles.borderRadius = node.cornerRadius + "px";
+  else if ("topLeftRadius" in node) {
+    styles.borderTopLeftRadius = node.topLeftRadius + "px";
+    styles.borderTopRightRadius = node.topRightRadius + "px";
+    styles.borderBottomLeftRadius = node.bottomLeftRadius + "px";
+    styles.borderBottomRightRadius = node.bottomRightRadius + "px";
+  }
 
+  // ---- Тени ----
+  if ("effects" in node && Array.isArray(node.effects)) {
+    const shadows = node.effects
+      .filter(e => (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") && e.visible !== false)
+      .map(e => `${e.type === "INNER_SHADOW" ? "inset " : ""}${e.offset.x}px ${e.offset.y}px ${e.radius}px ${rgbaToHex(e.color)}`)
+      .join(", ");
+    if (shadows) styles.boxShadow = shadows;
+  }
+
+  // ---- Layout / AutoLayout ----
+  if ("layoutMode" in node && node.layoutMode !== "NONE") {
+    styles.display = "flex";
+    styles.flexDirection = node.layoutMode === "HORIZONTAL" ? "row" : "column";
+    styles.justifyContent = mapPrimaryAxis(node.primaryAxisAlignItems);
+    styles.alignItems = mapCounterAxis(node.counterAxisAlignItems);
+    if ("itemSpacing" in node) styles.gap = node.itemSpacing + "px";
+    if ("paddingTop" in node) {
+      styles.padding = `${node.paddingTop}px ${node.paddingRight}px ${node.paddingBottom}px ${node.paddingLeft}px`;
+    }
+  }
+
+  // ---- Текст ----
   if (node.type === "TEXT") {
     const textNode = node as TextNode;
-    html += `<p class="${className}">${textNode.characters}</p>\n`;
+    if (textNode.fontSize) styles.fontSize = textNode.fontSize + "px";
+    if (textNode.fontName && typeof textNode.fontName !== "symbol") styles.fontFamily = `"${textNode.fontName.family}"`;
+    if (textNode.textAlignHorizontal) styles.textAlign = textNode.textAlignHorizontal.toLowerCase();
+    if (textNode.fontWeight) styles.fontWeight = textNode.fontWeight;
+    if (textNode.lineHeight && typeof textNode.lineHeight === "object" && "value" in textNode.lineHeight)
+      styles.lineHeight = textNode.lineHeight.value + "px";
+    styles.color = getTextColor(node);
+  }
+
+  if ("opacity" in node) styles.opacity = node.opacity;
+
+  css += `.${className} { ${Object.entries(styles)
+    .map(([k,v])=>k.replace(/[A-Z]/g,m=>"-"+m.toLowerCase()) + ":" + v)
+    .join("; ")}; }\n`;
+
+  if (node.type === "TEXT") {
+    html += `<p class="${className}">${(node as TextNode).characters}</p>\n`;
   } else if ("children" in node && node.children.length > 0) {
     html += `<div class="${className}">\n`;
     for (const child of node.children) {
@@ -113,9 +163,28 @@ function generateHTMLCSS(node: SceneNode, depth = 0): { html: string; css: strin
   return { html, css };
 }
 
-function rgbaToHex(color: RGB) {
-  const r = Math.round(color.r * 255), g = Math.round(color.g * 255), b = Math.round(color.b * 255);
-  return `#${[r,g,b].map(x=>x.toString(16).padStart(2,"0")).join("")}`;
+function mapPrimaryAxis(v: string): string {
+  switch(v) {
+    case "SPACE_BETWEEN": return "space-between";
+    case "CENTER": return "center";
+    case "MAX": return "flex-end";
+    default: return "flex-start";
+  }
+}
+function mapCounterAxis(v: string): string {
+  switch(v) {
+    case "CENTER": return "center";
+    case "MAX": return "flex-end";
+    default: return "flex-start";
+  }
+}
+
+function rgbaToHex(color: RGBA | RGB) {
+  const r = Math.round(color.r * 255);
+  const g = Math.round(color.g * 255);
+  const b = Math.round(color.b * 255);
+  const a = "a" in color ? Math.round(color.a * 100) / 100 : 1;
+  return a < 1 ? `rgba(${r}, ${g}, ${b}, ${a})` : `#${[r,g,b].map(x=>x.toString(16).padStart(2,"0")).join("")}`;
 }
 
 // ---------------------------
@@ -135,7 +204,10 @@ async function extractNodeJSON(node: SceneNode): Promise<any> {
     const fill = node.fills[0];
     if (fill.type === "SOLID" && fill.color) obj.fill = { r: fill.color.r, g: fill.color.g, b: fill.color.b };
     else if ((fill.type === "GRADIENT_LINEAR" || fill.type === "GRADIENT_RADIAL") && fill.gradientStops) {
-      obj.gradient = fill.gradientStops.map(s => ({ color: { r: s.color.r, g: s.color.g, b: s.color.b }, position: s.position }));
+      obj.gradient = fill.gradientStops.map(s => ({
+        color: { r: s.color.r, g: s.color.g, b: s.color.b },
+        position: s.position
+      }));
       obj.gradientType = fill.type;
     }
   }
@@ -145,6 +217,7 @@ async function extractNodeJSON(node: SceneNode): Promise<any> {
     obj.text = textNode.characters;
     obj.fontSize = textNode.fontSize;
     obj.color = getTextColor(node);
+    obj.fontFamily = typeof textNode.fontName !== "symbol" ? textNode.fontName.family : null;
   }
 
   if ("children" in node && node.children.length > 0) {

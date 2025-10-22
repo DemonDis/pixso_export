@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif; padding:10px">
+<h3>Figma → HTML/CSS/React Exporter</h3>
+
+<select id="mode">
+  <option value="html-css">HTML + CSS</option>
+  <option value="css-only">CSS только</option>
+  <option value="react-ai">React через AI</option>
+</select>
+<br><br>
+
+<div id="ai-settings" style="display:none;">
+  <label>API Key:</label>
+  <input type="password" id="apiKey" style="width:100%" />
+  <br><br>
+
+  <label>BASE_URL:</label>
+  <input type="text" id="baseUrl" style="width:100%" />
+  <br><br>
+
+  <label>GPT_MODEL_NAME:</label>
+  <input type="text" id="modelName" style="width:100%" />
+  <br><br>
+</div>
+
+<button id="generate">Сгенерировать</button>
+<button id="clear-settings">Очистить настройки</button>
+
+<pre id="output" style="white-space: pre-wrap; background:#f0f0f0; padding:10px; margin-top:10px; max-height:400px; overflow:auto;"></pre>
+
+<script>
+const modeSelect = document.getElementById('mode');
+const aiSettingsDiv = document.getElementById('ai-settings');
+const apiKeyInput = document.getElementById('apiKey');
+const baseUrlInput = document.getElementById('baseUrl');
+const modelNameInput = document.getElementById('modelName');
+
+modeSelect.onchange = () => {
+  aiSettingsDiv.style.display = (modeSelect.value === 'react-ai') ? 'block' : 'none';
+  parent.postMessage({ pluginMessage: { type: "save-mode", mode: modeSelect.value } }, "*");
+};
+
+// Загрузка сохранённых настроек
+parent.postMessage({ pluginMessage: { type: "load-settings" } }, "*");
+
+document.getElementById('generate').onclick = () => {
+  const mode = modeSelect.value;
+  const message = {
+    type: mode === 'html-css' ? 'generate-html-css' : mode === 'css-only' ? 'generate-css-only' : 'generate-react-ai'
+  };
+
+  if (mode === 'react-ai') {
+    message.apiKey = apiKeyInput.value;
+    message.baseUrl = baseUrlInput.value;
+    message.model = modelNameInput.value;
+
+    parent.postMessage({ pluginMessage: { type: "save-settings", apiKey: message.apiKey, baseUrl: message.baseUrl, model: message.model } }, "*");
+  }
+
+  parent.postMessage({ pluginMessage: message }, "*");
+  document.getElementById('output').textContent = '⌛ Генерация...';
+};
+
+document.getElementById('clear-settings').onclick = () => {
+  parent.postMessage({ pluginMessage: { type: "clear-settings" } }, "*");
+  apiKeyInput.value = '';
+  baseUrlInput.value = '';
+  modelNameInput.value = '';
+  document.getElementById('output').textContent = '⚠️ Настройки очищены';
+};
+
+window.onmessage = (event) => {
+  const msg = event.data.pluginMessage;
+  if (!msg) return;
+
+  if (msg.type === 'load-settings-result') {
+    if (msg.mode) modeSelect.value = msg.mode;
+    aiSettingsDiv.style.display = (modeSelect.value === 'react-ai') ? 'block' : 'none';
+    if (msg.apiKey) apiKeyInput.value = msg.apiKey;
+    if (msg.baseUrl) baseUrlInput.value = msg.baseUrl;
+    if (msg.model) modelNameInput.value = msg.model;
+  }
+
+  if (msg.type === 'result') document.getElementById('output').textContent = msg.code;
+  else if (msg.type === 'error') document.getElementById('output').textContent = '⚠️ ' + msg.message;
+  else if (msg.type === 'info') document.getElementById('output').textContent = 'ℹ️ ' + msg.message;
+};
+</script>
+</body>
+</html>
